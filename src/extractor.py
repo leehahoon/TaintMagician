@@ -364,6 +364,9 @@ def add_sink_site(instr: Any, caller_func: Any, target_func: Any, facts: Facts) 
 
 def resolve_callee(caller_func: Any, instr: Any) -> Any | None:
     """Return the callee function from a call instruction, or None if it cannot be resolved."""
+    if not hasattr(instr.dest, 'constant'):
+        # TODO: Handle indirect calls
+        return None
     callee_addr = instr.dest.constant
     return caller_func.view.get_function_at(callee_addr)
 
