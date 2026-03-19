@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>TaintMagician Graph Visualization</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        background: #ffffff;
+        color: #111827;
+      }
+      .app {
+        display: grid;
+        grid-template-columns: 260px 1fr 260px;
+        grid-template-rows: 48px 1fr;
+        grid-template-areas:
+          "header header header"
+          "sidebar graph detail";
+        height: 100vh;
+      }
+      header {
+        grid-area: header;
+        padding: 8px 16px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-bottom: 1px solid #e5e7eb;
+        background: #f9fafb;
+      }
+      header h1 {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 600;
+        color: #111827;
+      }
+      header span {
+        font-size: 12px;
+        color: #6b7280;
+      }
+      .sidebar {
+        grid-area: sidebar;
+        border-right: 1px solid #e5e7eb;
+        padding: 12px 12px 0;
+        background: #f9fafb;
+      }
+      .sidebar h2 {
+        margin: 0 0 8px;
+        font-size: 13px;
+        font-weight: 600;
+        color: #111827;
+      }
+      .search-box {
+        display: flex;
+        gap: 6px;
+      }
+      .search-box input {
+        flex: 1;
+        padding: 6px 8px;
+        font-size: 13px;
+        border-radius: 4px;
+        border: 1px solid #d1d5db;
+      }
+      .search-box button {
+        padding: 6px 10px;
+        font-size: 13px;
+        border-radius: 4px;
+        border: 1px solid #111827;
+        background: #111827;
+        color: #ffffff;
+        cursor: pointer;
+      }
+      .search-box button:hover {
+        background: #1f2937;
+      }
+      .search-help {
+        margin: 8px 0 0;
+        font-size: 11px;
+        color: #6b7280;
+      }
+      .search-results {
+        margin-top: 8px;
+        max-height: calc(100vh - 120px);
+        overflow-y: auto;
+        padding-right: 4px;
+        font-size: 12px;
+      }
+      .search-item {
+        padding: 4px 4px;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      .search-item:hover {
+        background: #e5e7eb;
+      }
+      .search-item strong {
+        display: block;
+        color: #111827;
+      }
+      .graph-container {
+        grid-area: graph;
+        position: relative;
+      }
+      #graph {
+        width: 100%;
+        height: 100%;
+      }
+      .detail {
+        grid-area: detail;
+        border-left: 1px solid #e5e7eb;
+        padding: 12px 12px 0;
+        background: #f9fafb;
+        font-size: 13px;
+      }
+      .detail h2 {
+        margin: 0 0 8px;
+        font-size: 13px;
+        font-weight: 600;
+        color: #111827;
+      }
+      .detail-section {
+        margin-bottom: 10px;
+      }
+      .detail-label {
+        font-weight: 500;
+        color: #374151;
+      }
+      .detail-value {
+        margin-left: 4px;
+        color: #111827;
+      }
+      .detail-small {
+        font-size: 11px;
+        color: #6b7280;
+      }
+      .edge-list {
+        margin-top: 4px;
+        max-height: 150px;
+        overflow-y: auto;
+        font-size: 11px;
+      }
+      .edge-item {
+        padding: 2px 0;
+        border-bottom: 1px solid #e5e7eb;
+      }
+      .edge-item:last-child {
+        border-bottom: none;
+      }
+      .node circle {
+        stroke: #9ca3af;
+        stroke-width: 1.5px;
+        cursor: pointer;
+      }
+      .node text {
+        font-size: 10px;
+        pointer-events: none;
+        fill: #111827;
+      }
+      .link {
+        stroke: #000000;
+        stroke-opacity: 0.6;
+        stroke-width: 1px;
+        marker-end: url(#arrow);
+      }
+      .node--highlight circle {
+        stroke: #2563eb;
+        stroke-width: 2px;
+      }
+      .link--highlight {
+        stroke: #2563eb;
+        stroke-width: 2px;
+        stroke-opacity: 0.9;
+      }
+      .node--search circle {
+        fill: #f97316;
+      }
+    </style>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+  </head>
+  <body>
+    <div class="app">
+      <header>
+        <h1>TaintMagician Graph</h1>
+        <span>Def-Use variable graph from analysis</span>
+      </header>
+
+      <aside class="sidebar">
+        <h2>Search by function</h2>
+        <div class="search-box">
+          <input
+            id="searchInput"
+            type="text"
+            placeholder="e.g. main, _start"
+          />
+          <button id="searchButton">Search</button>
+        </div>
+        <p class="search-help">
+          Type a function name and press Enter or click Search. Matching
+          variables are highlighted and listed below.
+        </p>
+        <div id="searchResults" class="search-results"></div>
+      </aside>
+
+      <main class="graph-container">
+        <svg id="graph"></svg>
+      </main>
+
+      <section class="detail">
+        <h2>Node details</h2>
+        <div id="detailContent">
+          <p class="detail-small">
+            Click a node in the graph to see its information here.
+          </p>
+        </div>
+      </section>
+    </div>
+
+    <script>
+      const svg = d3.select("#graph");
+      const container = document.querySelector(".graph-container");
+      const width = container.clientWidth;
+      const height = container.clientHeight;
+
+      // Root group for all zoomable content
+      const zoomLayer = svg
+        .attr("width", width)
+        .attr("height", height)
+        .append("g")
+        .attr("class", "zoom-layer");
+
+      const searchInput = document.getElementById("searchInput");
+      const searchButton = document.getElementById("searchButton");
+      const searchResults = document.getElementById("searchResults");
+      const detailContent = document.getElementById("detailContent");
+
+      let nodes = [];
+      let links = [];
+      let nodeSelection;
+      let linkSelection;
+
+      function renderDetail(node, inbound, outbound) {
+        if (!node) {
+          detailContent.innerHTML =
+            '<p class="detail-small">Click a node in the graph to see its information here.</p>';
+          return;
+        }
+        const varName = node.name;
+        const funcName = node.func || "(unknown)";
+        const inboundCount = inbound.length;
+        const outboundCount = outbound.length;
+
+        const fmtEdge = (e) =>
+          `0x${e.a1.toString(16)} (${e.f1}) → 0x${e.a2.toString(16)} (${e.f2})`;
+
+        detailContent.innerHTML = `
+          <div class="detail-section">
+            <span class="detail-label">Variable:</span>
+            <span class="detail-value">${varName}</span>
+          </div>
+          <div class="detail-section">
+            <span class="detail-label">Function:</span>
+            <span class="detail-value">${funcName}</span>
+          </div>
+          <div class="detail-section">
+            <span class="detail-label">Inbound edges:</span>
+            <span class="detail-value">${inboundCount}</span>
+          </div>
+          <div class="detail-section">
+            <span class="detail-label">Outbound edges:</span>
+            <span class="detail-value">${outboundCount}</span>
+          </div>
+          <div class="detail-section">
+            <div class="detail-label">Sample edges:</div>
+            <div class="edge-list">
+              ${[...inbound.slice(0, 5), ...outbound.slice(0, 5)]
+                .map((e) => `<div class="edge-item">${fmtEdge(e)}</div>`)
+                .join("") || '<div class="detail-small">No edges</div>'}
+            </div>
+          </div>
+        `;
+      }
+
+      function applySearchHighlight(matches) {
+        const matchIds = new Set(matches.map((n) => n.id));
+        nodeSelection.classed("node--search", (d) => matchIds.has(d.id));
+      }
+
+      function updateSearchResults(matches) {
+        if (!matches.length) {
+          searchResults.innerHTML =
+            '<p class="detail-small">No variables found for this function.</p>';
+          applySearchHighlight([]);
+          return;
+        }
+        applySearchHighlight(matches);
+        searchResults.innerHTML = matches
+          .slice(0, 50)
+          .map(
+            (n) => `
+            <div class="search-item" data-node-id="${n.id}">
+              <strong>${n.func || "(unknown)"}</strong>
+              <span>${n.name}</span>
+            </div>
+          `
+          )
+          .join("");
+
+        searchResults
+          .querySelectorAll(".search-item")
+          .forEach((el) =>
+            el.addEventListener("click", () => {
+              const id = Number(el.getAttribute("data-node-id"));
+              const node = nodes.find((n) => n.id === id);
+              if (node) {
+                focusNode(node);
+              }
+            })
+          );
+      }
+
+      function handleSearch() {
+        const q = (searchInput.value || "").trim().toLowerCase();
+        if (!q) {
+          searchResults.innerHTML =
+            '<p class="detail-small">Enter a function name to search.</p>';
+          applySearchHighlight([]);
+          return;
+        }
+        const matches = nodes.filter(
+          (n) => (n.func || "").toLowerCase().includes(q)
+        );
+        updateSearchResults(matches);
+      }
+
+      function focusNode(targetNode) {
+        const connected = new Set();
+        links.forEach((l) => {
+          if (l.source.id === targetNode.id) {
+            connected.add(l.target.id);
+          }
+          if (l.target.id === targetNode.id) {
+            connected.add(l.source.id);
+          }
+        });
+
+        nodeSelection.classed(
+          "node--highlight",
+          (n) => n.id === targetNode.id || connected.has(n.id)
+        );
+        linkSelection.classed(
+          "link--highlight",
+          (l) => l.source.id === targetNode.id || l.target.id === targetNode.id
+        );
+
+        const inbound = links.filter((l) => l.target.id === targetNode.id);
+        const outbound = links.filter((l) => l.source.id === targetNode.id);
+        renderDetail(targetNode, inbound, outbound);
+      }
+
+      searchButton.addEventListener("click", handleSearch);
+      searchInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          handleSearch();
+        }
+      });
+
+      fetch("/graph.json")
+        .then((res) => res.json())
+        .then((graph) => {
+          nodes = graph.nodes;
+          links = graph.edges.map((d) => Object.assign({}, d));
+
+          const simulation = d3
+            .forceSimulation(nodes)
+            .force(
+              "link",
+              d3.forceLink(links).id((d) => d.id).distance(60).strength(0.5)
+            )
+            .force("charge", d3.forceManyBody().strength(-80))
+            .force("center", d3.forceCenter(width / 2, height / 2))
+            .force("collision", d3.forceCollide().radius(20));
+
+          zoomLayer
+            .append("defs")
+            .append("marker")
+            .attr("id", "arrow")
+            .attr("viewBox", "0 -5 10 10")
+            .attr("refX", 16)
+            .attr("refY", 0)
+            .attr("markerWidth", 6)
+            .attr("markerHeight", 6)
+            .attr("orient", "auto")
+            .append("path")
+            .attr("d", "M0,-5L10,0L0,5")
+            .attr("fill", "#000000");
+
+          linkSelection = zoomLayer
+            .append("g")
+            .attr("stroke", "#000000")
+            .attr("stroke-opacity", 0.6)
+            .selectAll("line")
+            .data(links)
+            .join("line")
+            .attr("class", "link");
+
+          nodeSelection = zoomLayer
+            .append("g")
+            .attr("stroke-width", 1.5)
+            .selectAll("g")
+            .data(nodes)
+            .join("g")
+            .attr("class", "node")
+            .call(
+              d3
+                .drag()
+                .on("start", dragstarted)
+                .on("drag", dragged)
+                .on("end", dragended)
+            );
+
+          nodeSelection
+            .append("circle")
+            .attr("r", 7)
+            .attr("fill", "#e5e7eb");
+
+          nodeSelection
+            .append("text")
+            .attr("x", 9)
+            .attr("y", 3)
+            .text((d) => (d.func ? `${d.func}:${d.name}` : d.name));
+
+          nodeSelection.on("click", (_, d) => {
+            focusNode(d);
+          });
+
+          simulation.on("tick", () => {
+            linkSelection
+              .attr("x1", (d) => d.source.x)
+              .attr("y1", (d) => d.source.y)
+              .attr("x2", (d) => d.target.x)
+              .attr("y2", (d) => d.target.y);
+
+            nodeSelection.attr(
+              "transform",
+              (d) => `translate(${d.x},${d.y})`
+            );
+          });
+
+          function dragstarted(event, d) {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            d.fx = d.x;
+            d.fy = d.y;
+          }
+
+          function dragged(event, d) {
+            d.fx = event.x;
+            d.fy = event.y;
+          }
+
+          function dragended(event, d) {
+            if (!event.active) simulation.alphaTarget(0);
+            d.fx = null;
+            d.fy = null;
+          }
+          // Zoom & pan behavior
+          const zoom = d3
+            .zoom()
+            .scaleExtent([0.2, 5])
+            .on("zoom", (event) => {
+              zoomLayer.attr("transform", event.transform);
+            });
+
+          svg.call(zoom).call(
+            zoom.transform,
+            d3.zoomIdentity.translate(width / 2, height / 2)
+          );
+        })
+        .catch((err) => {
+          console.error("Failed to load graph:", err);
+        });
+    </script>
+  </body>
+</html>
+

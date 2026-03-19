@@ -7,6 +7,7 @@ from constraint import dump_facts
 from extractor import extract
 from edge_builder import build_edges
 from taint_solver import solve
+from visualize import serve_graph
 
 def load_binaryninja():
     try:
@@ -32,13 +33,22 @@ def parse_args() -> argparse.Namespace:
         "input",
         help="Path to input binary to analyze",
     )
+    parser.add_argument(
+        "--vis",
+        action="store_true",
+        help="Start a visualization server at http://localhost:7777 instead of running the solver",
+    )
     return parser.parse_args()
 
-def run_pipeline(bn, input_path: str) -> None:
+def run_pipeline(bn, input_path: str, vis: bool = False) -> None:
     with bn.load(input_path) as bv:
         bv.update_analysis_and_wait()
         facts = extract(bv)
         build_edges(facts)
+        if vis:
+            serve_graph(facts, port=7777)
+            return
+
         dump_facts(facts)
         alarms = solve(facts)
         for (addr, func, var) in alarms:
@@ -51,7 +61,7 @@ def main() -> None:
 
     # Open the binary (load returns a BinaryView; update_analysis is True by default)
     try:
-        run_pipeline(bn, args.input)
+        run_pipeline(bn, args.input, vis=args.vis)
     except Exception as e:
         print(f"Error: Failed to open '{args.input}': {e}", file=sys.stderr)
         sys.exit(1)
