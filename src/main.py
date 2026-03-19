@@ -34,13 +34,18 @@ def parse_args() -> argparse.Namespace:
         help="Path to input binary to analyze",
     )
     parser.add_argument(
+        "--only-src-sink",
+        action="store_true",
+        help="Send only edges that can lie on a path from any source to any sink (prunes unrelated facts before Z3)",
+    )
+    parser.add_argument(
         "--vis",
         action="store_true",
         help="Start a visualization server at http://localhost:7777 instead of running the solver",
     )
     return parser.parse_args()
 
-def run_pipeline(bn, input_path: str, vis: bool = False) -> None:
+def run_pipeline(bn, input_path: str, vis: bool = False, only_src_sink: bool = False) -> None:
     with bn.load(input_path) as bv:
         bv.update_analysis_and_wait()
         facts = extract(bv)
@@ -50,7 +55,7 @@ def run_pipeline(bn, input_path: str, vis: bool = False) -> None:
             return
 
         dump_facts(facts)
-        alarms = solve(facts)
+        alarms = solve(facts, only_src_sink=only_src_sink)
         for (addr, func, var) in alarms:
             print(f"[ALARM] {func} @ 0x{addr:x}  var={var}")
 
@@ -61,7 +66,7 @@ def main() -> None:
 
     # Open the binary (load returns a BinaryView; update_analysis is True by default)
     try:
-        run_pipeline(bn, args.input, vis=args.vis)
+        run_pipeline(bn, args.input, vis=args.vis, only_src_sink=args.only_src_sink)
     except Exception as e:
         print(f"Error: Failed to open '{args.input}': {e}", file=sys.stderr)
         sys.exit(1)

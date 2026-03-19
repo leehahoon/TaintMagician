@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import Dict, Iterable, List, Set, Tuple
 
 from z3 import And, BoolSort, Fixedpoint, IntSort, Function, Ints, sat
 
@@ -17,6 +17,105 @@ def fid(func_name: str) -> int:
 def vid(var_key: str) -> int:
     # var_key is expected to be stable & namespaced already (e.g., "x0#1@_start", "mem#2@_source")
     return var_ids.get(var_key)
+
+Node = Tuple[str, int, str, str]  # (kind: "V"|"M", addr, func, name)
+
+def _v(addr: int, func: str, var: str) -> Node:
+    return ("V", addr, func, var)
+
+def _m(addr: int, func: str, mem: str) -> Node:
+    return ("M", addr, func, mem)
+
+def _bfs(starts: Iterable[Node], adj: Dict[Node, Set[Node]]) -> Set[Node]:
+    seen: Set[Node] = set()
+    work = list(starts)
+    for n in work:
+        seen.add(n)
+    i = 0
+    while i < len(work):
+        cur = work[i]
+        i += 1
+        for nxt in adj.get(cur, ()):
+            if nxt in seen:
+                continue
+            seen.add(nxt)
+            work.append(nxt)
+    return seen
+
+def prune_facts_only_src_sink(facts: Facts) -> Facts:
+    """
+    Prune facts to only those that can participate in a path:
+      (any SrcVar/SrcMem) -> ... -> (any SinkVar/SinkMem)
+
+    This is a pure, syntactic reachability filter over the *fact graph*,
+    intended to reduce the number of edges/facts sent into Z3.
+    """
+    adj: Dict[Node, Set[Node]] = {}
+    radj: Dict[Node, Set[Node]] = {}
+
+    def add_edge(a: Node, b: Node) -> None:
+        adj.setdefault(a, set()).add(b)
+        radj.setdefault(b, set()).add(a)
+
+    # Variable and memory edges
+    for e in facts.v_edges:
+        add_edge(_v(e.a1, e.f1, e.v1), _v(e.a2, e.f2, e.v2))
+    for e in facts.m_edges:
+        add_edge(_m(e.a1, e.f1, e.m1), _m(e.a2, e.f2, e.m2))
+
+    # Cross edges at the same (addr, func)
+    for e in facts.v2m:
+        add_edge(_v(e.addr, e.func, e.var), _m(e.addr, e.func, e.mem))
+    for e in facts.m2v:
+        add_edge(_m(e.addr, e.func, e.mem), _v(e.addr, e.func, e.var))
+
+    src_nodes: Set[Node] = set(_v(s.addr, s.call_name, s.var) for s in facts.src_vars) | set(
+        _m(s.addr, s.call_name, s.mem) for s in facts.src_mems
+    )
+    sink_nodes: Set[Node] = set(_v(s.addr, s.call_name, s.var) for s in facts.sink_vars) | set(
+        _m(s.addr, s.call_name, s.mem) for s in facts.sink_mems
+    )
+
+    # If there are no sources or no sinks, no edge can be on a src->sink path.
+    if not src_nodes or not sink_nodes:
+        pruned = Facts()
+        pruned.src_vars = list(facts.src_vars)
+        pruned.sink_vars = list(facts.sink_vars)
+        pruned.src_mems = list(facts.src_mems)
+        pruned.sink_mems = list(facts.sink_mems)
+        return pruned
+
+    fwd = _bfs(src_nodes, adj)
+    bwd = _bfs(sink_nodes, radj)
+    keep_nodes = (fwd & bwd) | src_nodes | sink_nodes
+
+    def keep_vedge(e) -> bool:
+        return _v(e.a1, e.f1, e.v1) in keep_nodes and _v(e.a2, e.f2, e.v2) in keep_nodes
+
+    def keep_medge(e) -> bool:
+        return _m(e.a1, e.f1, e.m1) in keep_nodes and _m(e.a2, e.f2, e.m2) in keep_nodes
+
+    def keep_v2m(e) -> bool:
+        return _v(e.addr, e.func, e.var) in keep_nodes and _m(e.addr, e.func, e.mem) in keep_nodes
+
+    def keep_m2v(e) -> bool:
+        return _m(e.addr, e.func, e.mem) in keep_nodes and _v(e.addr, e.func, e.var) in keep_nodes
+
+    pruned = Facts()
+    pruned.src_vars = list(facts.src_vars)
+    pruned.sink_vars = list(facts.sink_vars)
+    pruned.src_mems = list(facts.src_mems)
+    pruned.sink_mems = list(facts.sink_mems)
+
+    pruned.v_edges = [e for e in facts.v_edges if keep_vedge(e)]
+    pruned.m_edges = [e for e in facts.m_edges if keep_medge(e)]
+    pruned.v2m = [e for e in facts.v2m if keep_v2m(e)]
+    pruned.m2v = [e for e in facts.m2v if keep_m2v(e)]
+
+    # UseMem facts are only relevant if their (addr,func,mem) node survives.
+    pruned.use_mems = [u for u in facts.use_mems if _m(u.addr, u.func, u.name) in keep_nodes]
+
+    return pruned
 
 
 # ----------------------------
@@ -190,15 +289,13 @@ def is_tainted_val(fp: Fixedpoint, rel: Dict[str, object], addr: int, func_name:
     return fp.query(TaintVal(addr, fid(func_name), vid(var_key))) == sat
 
 
-# ----------------------------
-# Main entry
-# ----------------------------
-
-def solve(facts: Facts) -> List[Tuple[int, str, str]]:
+def solve(facts: Facts, *, only_src_sink: bool = False) -> List[Tuple[int, str, str]]:  # type: ignore[no-redef]
     """
-    Returns list of alarm hits as tuples:
-      (sink_addr, sink_func_name, sink_var_key)
+    When `only_src_sink=True`, prune facts to only those that can lie on a
+    source->sink path before feeding them into Z3.
     """
+    if only_src_sink:
+        facts = prune_facts_only_src_sink(facts)
     fp, rel = build_fp()
     load_facts(fp, rel, facts)
 
