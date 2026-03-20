@@ -83,74 +83,6 @@ def _bfs(starts: Iterable[GraphNode], adj: Dict[GraphNode, Set[GraphNode]]) -> S
     return seen
 
 
-def prune_facts_only_src_sink(facts: Facts) -> Facts:
-    """
-    Keep only edges that can lie on a path from any SrcVar/SrcMem to any SinkVar/SinkMem.
-    """
-    adj: Dict[GraphNode, Set[GraphNode]] = {}
-    radj: Dict[GraphNode, Set[GraphNode]] = {}
-
-    def add_edge(a: GraphNode, b: GraphNode) -> None:
-        adj.setdefault(a, set()).add(b)
-        radj.setdefault(b, set()).add(a)
-
-    for e in facts.v_edges:
-        add_edge(_gn_v(e.a1, e.f1, e.v1), _gn_v(e.a2, e.f2, e.v2))
-    for e in facts.m_edges:
-        add_edge(_gn_m(e.a1, e.f1, e.m1), _gn_m(e.a2, e.f2, e.m2))
-    for e in facts.v2m:
-        add_edge(_gn_v(e.addr, e.func, e.var), _gn_m(e.addr, e.func, e.mem))
-    for e in facts.m2v:
-        add_edge(_gn_m(e.addr, e.func, e.mem), _gn_v(e.addr, e.func, e.var))
-
-    src_nodes = set(_gn_v(s.addr, s.call_name, s.var) for s in facts.src_vars) | set(
-        _gn_m(s.addr, s.call_name, s.mem) for s in facts.src_mems
-    )
-    sink_nodes = set(_gn_v(s.addr, s.call_name, s.var) for s in facts.sink_vars) | set(
-        _gn_m(s.addr, s.call_name, s.mem) for s in facts.sink_mems
-    )
-
-    if not src_nodes or not sink_nodes:
-        pruned = Facts()
-        pruned.src_vars = list(facts.src_vars)
-        pruned.sink_vars = list(facts.sink_vars)
-        pruned.src_mems = list(facts.src_mems)
-        pruned.sink_mems = list(facts.sink_mems)
-        return pruned
-
-    keep = (_bfs(src_nodes, adj) & _bfs(sink_nodes, radj)) | src_nodes | sink_nodes
-
-    def kv(e) -> bool:
-        return _gn_v(e.a1, e.f1, e.v1) in keep and _gn_v(e.a2, e.f2, e.v2) in keep
-
-    def km(e) -> bool:
-        return _gn_m(e.a1, e.f1, e.m1) in keep and _gn_m(e.a2, e.f2, e.m2) in keep
-
-    def kv2m(e) -> bool:
-        return _gn_v(e.addr, e.func, e.var) in keep and _gn_m(e.addr, e.func, e.mem) in keep
-
-    def km2v(e) -> bool:
-        return _gn_m(e.addr, e.func, e.mem) in keep and _gn_v(e.addr, e.func, e.var) in keep
-
-    pruned = Facts()
-    pruned.src_vars = list(facts.src_vars)
-    pruned.sink_vars = list(facts.sink_vars)
-    pruned.src_mems = list(facts.src_mems)
-    pruned.sink_mems = list(facts.sink_mems)
-    pruned.v_edges = [e for e in facts.v_edges if kv(e)]
-    pruned.m_edges = [e for e in facts.m_edges if km(e)]
-    pruned.v2m = [e for e in facts.v2m if kv2m(e)]
-    pruned.m2v = [e for e in facts.m2v if km2v(e)]
-    pruned.mem2rets = [
-        e
-        for e in facts.mem2rets
-        if _gn_m(e.addr, e.call_name, e.mem) in keep
-        and _gn_v(e.addr, e.call_name, e.var) in keep
-    ]
-    pruned.use_mems = [u for u in facts.use_mems if _gn_m(u.addr, u.func, u.name) in keep]
-    return pruned
-
-
 # ----------------------------
 # Build FP: binary VEdge/MEdge/M2V/V2M/Mem2Ret; unary TaintVal/TaintMem
 # ----------------------------
@@ -307,13 +239,10 @@ def is_tainted_mem(fp: Fixedpoint, rel: Dict[str, object], addr: int, func_name:
 # Main entry
 # ----------------------------
 
-def solve(facts: Facts, *, only_src_sink: bool = False) -> List[Tuple[int, str, str]]:
+def solve(facts: Facts) -> List[Tuple[int, str, str]]:
     """
     Return sink hits as (addr, func_name, var_or_mem_key) for tainted sink_vars / sink_mems.
     """
-    if only_src_sink:
-        facts = prune_facts_only_src_sink(facts)
-
     _reset_node_packs()
     fp, rel = build_fp()
     load_facts(fp, rel, facts)

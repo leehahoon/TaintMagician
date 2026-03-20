@@ -45,7 +45,7 @@ def parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
-def run_pipeline(bn, input_path: str, vis: bool = False, only_src_sink: bool = False) -> None:
+def run_pipeline(bn, input_path: str, vis: bool = False) -> None:
     with bn.load(input_path) as bv:
         bv.update_analysis_and_wait()
         facts = extract(bv)
@@ -55,7 +55,7 @@ def run_pipeline(bn, input_path: str, vis: bool = False, only_src_sink: bool = F
             return
 
         dump_facts(facts)
-        alarms = solve(facts, only_src_sink=only_src_sink)
+        alarms = solve(facts)
         for (addr, func, var) in alarms:
             print(f"[ALARM] {func} @ 0x{addr:x}  var={var}")
 
@@ -66,7 +66,7 @@ def main() -> None:
 
     # Open the binary (load returns a BinaryView; update_analysis is True by default)
     try:
-        run_pipeline(bn, args.input, vis=args.vis, only_src_sink=args.only_src_sink)
+        run_pipeline(bn, args.input, vis=args.vis)
     except Exception as e:
         print(f"Error: Failed to open '{args.input}': {e}", file=sys.stderr)
         sys.exit(1)
