@@ -132,6 +132,16 @@ class SinkMemFact:
     def __str__(self) -> str:
         return f"sink_mem(0x{self.addr:x}, {self.call_name}, {self.mem})"
 
+@dataclass(frozen=True)
+class Mem2RetFact:
+    addr: int
+    call_name: str
+    mem: str
+    var: str
+
+    def __str__(self) -> str:
+        return f"mem2ret(0x{self.addr:x}, {self.call_name}, {self.mem}, {self.var})"
+
 # ----------------------------
 # Edge data types (def-use edges)
 # ----------------------------
@@ -205,6 +215,7 @@ class Facts:
     m_edges: list[MEdge] = field(default_factory=list)
     m2v: list[M2V] = field(default_factory=list)
     v2m: list[V2M] = field(default_factory=list)
+    mem2rets: list[Mem2RetFact] = field(default_factory=list)
 
 def dump_facts(facts: Facts) -> None:
     """Print `Facts` contents to stdout, grouped by section."""
@@ -227,4 +238,5 @@ def dump_facts(facts: Facts) -> None:
     print_section("SinkVar", facts.sink_vars)
     print_section("SrcMem", facts.src_mems)
     print_section("SinkMem", facts.sink_mems)
+    print_section("Mem2Ret", facts.mem2rets)
 

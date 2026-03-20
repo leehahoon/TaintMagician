@@ -5,22 +5,6 @@ from typing import Any, Iterator, NamedTuple
 import binaryninja
 from binaryninja import BinaryView
 
-
-class CallContext(NamedTuple):
-    """Context for a single call (address, function name, target)."""
-    caller_addr: int
-    caller_func_name: str
-    callee_func_name: str
-    target_func: Any
-
-
-class ReturnSiteContext(NamedTuple):
-    """A single return-site connection: caller/callee pair."""
-    caller_func: Any
-    caller_instr: Any
-    callee_func: Any
-    callee_instr: Any
-
 from constraint import (
     Facts,
     DefFact,
@@ -37,9 +21,27 @@ from constraint import (
     MEdge,
     M2V,
     V2M,
+    Mem2RetFact,
     func_ids,
     var_ids,
 )
+
+
+class CallContext(NamedTuple):
+    """Context for a single call (address, function name, target)."""
+    caller_addr: int
+    caller_func_name: str
+    callee_func_name: str
+    target_func: Any
+
+
+class ReturnSiteContext(NamedTuple):
+    """A single return-site connection: caller/callee pair."""
+    caller_func: Any
+    caller_instr: Any
+    callee_func: Any
+    callee_instr: Any
+
 
 # Keywords for detecting source/sink (module-level constants)
 # ["keyword", param_index]
@@ -69,6 +71,9 @@ def handle_instr(bv: BinaryView, func: Any, instr: Any, facts: Facts) -> None:
     """Dispatch def/use/memory/call/return collection for a single MLIL instruction."""
     ssa = instr.ssa_form
     if ssa is None:
+        return
+
+    if ssa.operation.name == "MLIL_TAILCALL_SSA":
         return
 
     collect_def_vars(ssa, func, facts)
@@ -229,6 +234,10 @@ def collect_mem_version_change(instr: Any, func: Any, facts: Facts) -> None:
     add_def_mem(addr, func_name, def_name, facts)
     add_use_mem(addr, func_name, use_name, facts)
 
+    facts.m_edges.append(
+        MEdge(a1=addr, f1=func_name, m1=use_name, a2=addr, f2=func_name, m2=def_name)
+    )
+
 
 def is_var_aliased(instr: Any) -> bool:
     """Return True if the instruction's src is MLIL_VAR_ALIASED."""
@@ -245,7 +254,8 @@ def collect_mem(instr: Any, func: Any, facts: Facts) -> None:
 
 
 def collect_m2v_ssa(ssa: Any, func: Any, facts: Facts) -> None:
-    if ssa.src.operation.name == "MLIL_VAR_ALIASED":
+    op = ssa.src.operation.name
+    if op in ("MLIL_VAR_ALIASED", "MLIL_SET_VAR_ALIASED", "MLIL_LOAD_SSA"):
         addr = ssa.address
         func_name = func.name
         var_name = naming_var(ssa.dest, func_name)
@@ -356,7 +366,8 @@ def add_sink_site(instr: Any, caller_func: Any, target_func: Any, facts: Facts) 
         ensure_registered(caller_name, sink_mem_name)
         facts.sinks.append(SinkFact(addr=addr, call_name=caller_name))
         facts.sink_vars.append(
-            SinkVarFact(addr=addr, call_name=caller_name, var=sink_var_name))
+            SinkVarFact(addr=addr, call_name=caller_name, var=sink_var_name)
+        )
         facts.sink_mems.append(
             SinkMemFact(addr=addr, call_name=caller_name, mem=sink_mem_name)
         )
@@ -364,7 +375,7 @@ def add_sink_site(instr: Any, caller_func: Any, target_func: Any, facts: Facts) 
 
 def resolve_callee(caller_func: Any, instr: Any) -> Any | None:
     """Return the callee function from a call instruction, or None if it cannot be resolved."""
-    if not hasattr(instr.dest, 'constant'):
+    if not hasattr(instr.dest, "constant"):
         # TODO: Handle indirect calls
         return None
     callee_addr = instr.dest.constant
@@ -382,6 +393,27 @@ def record_src_sink(instr: Any, caller_func: Any, target_func: Any, facts: Facts
     add_sink_site(instr, caller_func, target_func, facts)
 
 
+_STRING_FUNCS = frozenset(
+    {"strtok", "strtok_r", "strchr", "strrchr", "strstr", "memchr", "strpbrk"}
+)
+
+
+def collect_mem2ret(instr: Any, caller_func: Any, target_func: Any, facts: Facts) -> None:
+    """If the callee is a string helper, record Mem2Ret facts for each written SSA var."""
+    if not any(k in target_func.name for k in _STRING_FUNCS):
+        return
+    addr = instr.address
+    func_name = caller_func.name
+    mem_name = naming_mem(instr.ssa_memory_version, func_name)
+    ensure_registered(func_name, mem_name)
+    for var in instr.vars_written or ():
+        var_name = naming_var(var, func_name)
+        ensure_registered(func_name, var_name)
+        facts.mem2rets.append(
+            Mem2RetFact(addr=addr, call_name=func_name, mem=mem_name, var=var_name)
+        )
+
+
 def handle_call(caller_func: Any, instr: Any, facts: Facts) -> None:
     """For a single CALL instruction, dispatch callee resolution, source/sink recording, and parameter/memory collection."""
     target_func = resolve_callee(caller_func, instr)
@@ -389,10 +421,39 @@ def handle_call(caller_func: Any, instr: Any, facts: Facts) -> None:
         collect_mem(instr, caller_func, facts)
         return
 
+    collect_mem2ret(instr, caller_func, target_func, facts)
     ensure_call_registered(caller_func, target_func)
     record_src_sink(instr, caller_func, target_func, facts)
     collect_param(instr, caller_func, target_func, facts)
     collect_mem(instr, caller_func, facts)
+    collect_call_mem(instr, caller_func, target_func, facts)
+
+
+def collect_call_mem(instr: Any, caller_func: Any, target_func: Any, facts: Facts) -> None:
+    """If the call is a call_mem site, record it into facts."""
+    callsite_addr = instr.address
+    callsite_func_name = caller_func.name
+    callsite_mem_name = naming_mem(instr.ssa_memory_version, callsite_func_name)
+    ensure_registered(callsite_func_name, callsite_mem_name)
+
+    entry_instr = find_entry_instr(target_func)
+    if entry_instr is None:
+        return
+    entry_addr = entry_instr.address
+    entry_func_name = target_func.name
+    entry_mem_name = naming_mem(entry_instr.ssa_memory_version, entry_func_name)
+    ensure_registered(entry_func_name, entry_mem_name)
+
+    facts.m_edges.append(
+        MEdge(
+            a1=callsite_addr,
+            f1=callsite_func_name,
+            m1=callsite_mem_name,
+            a2=entry_addr,
+            f2=entry_func_name,
+            m2=entry_mem_name,
+        )
+    )
 
 
 def get_use_instr(callee_func: Any, ssa_var: Any) -> Any | None:
@@ -431,7 +492,7 @@ def add_param_edge(
 
 
 def collect_param(instr: Any, caller_func: Any, target_func: Any, facts: Facts) -> None:
-    """For a single call site, add Def–Use VEdges for all parameters."""
+    """For a single call site, add Def-Use VEdges for all parameters."""
     ctx = CallContext(
         caller_addr=instr.address,
         caller_func_name=caller_func.name,
@@ -467,6 +528,16 @@ def iter_return_sites(
 
 def handle_return(bv: BinaryView, callee_func: Any, callee_instr: Any, facts: Facts) -> None:
     """For a single RET instruction, connect only the return variable/memory edges for all call sites of this function."""
+    addr = callee_instr.address
+    func_name = callee_func.name
+    mem_name = naming_mem(callee_instr.ssa_memory_version, func_name)
+    ensure_registered(func_name, mem_name)
+
+    for var in callee_instr.src:
+        var_name = naming_var(var, func_name)
+        ensure_registered(func_name, var_name)
+        facts.mem2rets.append(Mem2RetFact(addr=addr, call_name=func_name, mem=mem_name, var=var_name))
+
     for caller_func, _caller_addr, caller_instrs in iter_return_sites(bv, callee_func):
         for caller_instr in caller_instrs:
             ctx = ReturnSiteContext(
@@ -537,7 +608,7 @@ def collect_return_mems(ctx: ReturnSiteContext, facts: Facts) -> None:
     callee_mem = naming_mem(
         ctx.callee_instr.ssa_memory_version_after, ctx.callee_func.name
     )
-    mem_def_instr = find_mem_def_site(ctx.callee_instr, ctx.callee_func, facts)
+    mem_def_instr = find_mem_def_site(ctx.callee_instr, ctx.callee_func)
     if mem_def_instr is not None:
         callee_instr = mem_def_instr
     else:
@@ -555,13 +626,27 @@ def collect_return_mems(ctx: ReturnSiteContext, facts: Facts) -> None:
         )
     )
 
-def find_mem_def_site(ret_instr: Any, func: Any, facts: Facts) -> None:
+def find_mem_def_site(ret_instr: Any, func: Any) -> Any | None:
+    """Return an instruction whose post-mem version matches ret_instr's mem version, if any."""
     mlil = func.mlil
     if mlil is None:
-        return
+        return None
     for block in mlil.ssa_form.basic_blocks:
         for instr in block:
-            if instr.ssa_memory_version != instr.ssa_memory_version_after and \
-                ret_instr.ssa_memory_version == instr.ssa_memory_version_after:
+            if (
+                instr.ssa_memory_version != instr.ssa_memory_version_after
+                and ret_instr.ssa_memory_version == instr.ssa_memory_version_after
+            ):
                 return instr
+    return None
 
+
+def find_entry_instr(func: Any) -> Any | None:
+    """Return the first SSA instruction of the function, or None."""
+    mlil = func.mlil
+    if mlil is None:
+        return None
+    for block in mlil.ssa_form.basic_blocks:
+        for instr in block:
+            return instr
+    return None

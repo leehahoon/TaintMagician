@@ -1,6 +1,6 @@
 CC = gcc
 
-PROGS = simple1 simple2 simple3
+PROGS = simple1 simple2 simple3 simple4
 
 .PHONY: all clean
 

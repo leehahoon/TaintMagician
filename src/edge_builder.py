@@ -7,13 +7,9 @@ from constraint import Facts, VEdge, MEdge
 
 def build_edges(facts: Facts) -> None:
     """
-    Connect Def-Use and populate variable edges (VEdge) 
-    and memory edges (MEdge) in facts.
+    Connect Def-Use and populate variable edges (VEdge) and memory edges (MEdge) in facts.
     """
-    # facts.v_edges.clear()
-    # facts.m_edges.clear()
     build_var_edges(facts)
-    # build_mem_edges(facts)
 
 
 def _group_by_name(items, name_attr: str = "name"):
