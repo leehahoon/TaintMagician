@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, List, Set, Tuple
 
-from z3 import And, BoolSort, Fixedpoint, IntSort, Function, Ints, sat
+from z3 import And, BoolSort, Fixedpoint, IntSort, Function, Ints, sat, BitVecSort, BitVecs
 
 from constraint import Facts, IdMapper, func_ids, var_ids
 
@@ -89,8 +89,9 @@ def _bfs(starts: Iterable[GraphNode], adj: Dict[GraphNode, Set[GraphNode]]) -> S
 
 def build_fp() -> Tuple[Fixedpoint, Dict[str, object]]:
     fp = Fixedpoint()
-    fp.set(engine="spacer")
-    I = IntSort()
+    fp.set(engine="datalog")
+    # I = IntSort()
+    I = BitVecSort(32)
 
     UseMem = Function("UseMem", I, BoolSort())
     MemVersionId = Function("MemVersionId", I, I, I, BoolSort())
@@ -125,7 +126,7 @@ def build_fp() -> Tuple[Fixedpoint, Dict[str, object]]:
         TaintMem,
     )
 
-    m1, m2, f, x, v, v1, v2 = Ints("m1 m2 f x v v1 v2")
+    m1, m2, f, x, v, v1, v2 = BitVecs("m1 m2 f x v v1 v2", 32)
     fp.declare_var(m1, m2, f, x, v, v1, v2)
 
     # SSA mem carry: same (func_id, mem_ssa_id) at another use site
