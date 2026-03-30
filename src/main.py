@@ -34,11 +34,6 @@ def parse_args() -> argparse.Namespace:
         help="Path to input binary to analyze",
     )
     parser.add_argument(
-        "--only-src-sink",
-        action="store_true",
-        help="Send only edges that can lie on a path from any source to any sink (prunes unrelated facts before Z3)",
-    )
-    parser.add_argument(
         "--vis",
         action="store_true",
         help="Start a visualization server at http://localhost:7777 instead of running the solver",
