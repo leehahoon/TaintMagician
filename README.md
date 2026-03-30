@@ -98,6 +98,6 @@ Output:
 ```sh
 ./taint_magician test/simple1
 ...
-[ALARM] _main @ 0x100000438  var=x0_1#2@_main
-[ALARM] _main @ 0x100000438  var=mem#3@_main
+[ALARM] _main @ 0x100000438  var=x0_1#2@_main ; variable taint
+[ALARM] _main @ 0x100000438  var=mem#3@_main  ; memory taint
 ```
