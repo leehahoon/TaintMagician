@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Set, Tuple
+from typing import Dict, List, Tuple
 
 from z3 import And, BoolSort, Fixedpoint, IntSort, Function, Ints, sat, BitVecSort, BitVecs
 
@@ -49,38 +49,6 @@ def pack_m(addr: int, func_name: str, mem_key: str) -> int:
 
 def _mem_version_ids(func_name: str, mem_key: str) -> Tuple[int, int]:
     return fid(func_name), vid(mem_key)
-
-
-# ----------------------------
-# Prune graph (logical SSA nodes; not Z3 pack ids)
-# ----------------------------
-
-GraphNode = Tuple[str, int, str, str]  # ("V"|"M", addr, func, name)
-
-
-def _gn_v(addr: int, func: str, var: str) -> GraphNode:
-    return ("V", addr, func, var)
-
-
-def _gn_m(addr: int, func: str, mem: str) -> GraphNode:
-    return ("M", addr, func, mem)
-
-
-def _bfs(starts: Iterable[GraphNode], adj: Dict[GraphNode, Set[GraphNode]]) -> Set[GraphNode]:
-    seen: Set[GraphNode] = set()
-    work = list(starts)
-    for n in work:
-        seen.add(n)
-    i = 0
-    while i < len(work):
-        cur = work[i]
-        i += 1
-        for nxt in adj.get(cur, ()):
-            if nxt in seen:
-                continue
-            seen.add(nxt)
-            work.append(nxt)
-    return seen
 
 
 # ----------------------------
