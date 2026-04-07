@@ -46,8 +46,62 @@ class ReturnSiteContext(NamedTuple):
 # Keywords for detecting source/sink (module-level constants)
 # ["keyword", param_index]
 # Ex) read(fd, buf, len) -> param_index=1 when taint `buf`
-_SRC_KEYWORDS = (["source", 0], ["read", 1], ["recv", 1])
-_SINK_KEYWORDS = (["sink", 0], ["strcpy", 1], ["sprintf", 1])
+#
+# NOTE: This is a lightweight keyword-based classification.
+# - Matching is substring-based (see is_src_site / is_sink_site).
+# - param_index selects which argument is treated as the tainted value node.
+# - For sinks, param_index == -1 means: treat *all* call arguments as sinks.
+#
+# Sources: user-controlled input written into a caller-provided buffer/pointer.
+_SRC_KEYWORDS = (
+    # local test helpers
+    ["source", 0],
+    # file / fd IO
+    ["read", 1],
+    ["pread", 1],
+    ["readv", 1],
+    ["recv", 1],
+    ["recvfrom", 1],
+    ["recvmsg", 1],
+    # stdio / string input
+    ["fgets", 0],
+    ["gets", 0],
+    ["getline", 0],
+    ["getdelim", 0],
+    # scanf-family (first output pointer only; additional outputs are not modeled here)
+    ["scanf", 1],
+    ["fscanf", 2],
+    ["sscanf", 2],
+)
+
+# Sinks: dangerous calls where attacker-controlled data can trigger cmdi/bof, etc.
+_SINK_KEYWORDS = (
+    # local test helpers
+    ["sink", 0],
+    # command execution (treat all args as sinks where applicable)
+    ["system", -1],
+    ["popen", 0],
+    ["execl", -1],
+    ["execle", -1],
+    ["execlp", -1],
+    ["execv", -1],
+    ["execve", -1],
+    ["execvp", -1],
+    ["execvpe", -1],
+    # classic buffer overflows / format-string-ish
+    ["strcpy", 1],
+    ["stpcpy", 1],
+    ["strncpy", 1],
+    ["strcat", 1],
+    ["strncat", 1],
+    ["sprintf", 1],
+    ["vsprintf", 1],
+    ["snprintf", 1],
+    ["vsnprintf", 1],
+    # memory copy/move (source operand is attacker-controlled)
+    ["memcpy", 1],
+    ["memmove", 1],
+)
 
 
 # ---------------------------------------------------------------------------
@@ -357,20 +411,31 @@ def add_sink_site(instr: Any, caller_func: Any, target_func: Any, facts: Facts) 
         if entry[0] not in callee_name:
             continue
         param_idx = entry[1]
+        # param_idx == -1 means: treat *all* call arguments as sink vars.
+        sink_mem_name = naming_mem(instr.ssa_memory_version_after, caller_name)
+        ensure_registered(caller_name, sink_mem_name)
+
+        def _record_sink_var(sink_var: Any) -> None:
+            sink_var_name = naming_var(sink_var, caller_name)
+            ensure_registered(caller_name, sink_var_name)
+            facts.sink_vars.append(
+                SinkVarFact(addr=addr, call_name=caller_name, var=sink_var_name)
+            )
+
+        if param_idx == -1:
+            if not params:
+                continue
+            facts.sinks.append(SinkFact(addr=addr, call_name=caller_name))
+            facts.sink_mems.append(SinkMemFact(addr=addr, call_name=caller_name, mem=sink_mem_name))
+            for p in params:
+                _record_sink_var(p)
+            continue
+
         if param_idx >= len(params):
             continue
-        sink_var = params[param_idx]
-        sink_var_name = naming_var(sink_var, caller_name)
-        sink_mem_name = naming_mem(instr.ssa_memory_version_after, caller_name)
-        ensure_registered(caller_name, sink_var_name)
-        ensure_registered(caller_name, sink_mem_name)
         facts.sinks.append(SinkFact(addr=addr, call_name=caller_name))
-        facts.sink_vars.append(
-            SinkVarFact(addr=addr, call_name=caller_name, var=sink_var_name)
-        )
-        facts.sink_mems.append(
-            SinkMemFact(addr=addr, call_name=caller_name, mem=sink_mem_name)
-        )
+        facts.sink_mems.append(SinkMemFact(addr=addr, call_name=caller_name, mem=sink_mem_name))
+        _record_sink_var(params[param_idx])
 
 
 def resolve_callee(caller_func: Any, instr: Any) -> Any | None:
